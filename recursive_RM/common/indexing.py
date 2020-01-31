@@ -81,9 +81,9 @@ def projection_index(m, d, filter_func=lambda B: True):
         mask[W.argmax(axis=1)] = True
         U, V = I[mask], I[~mask]
         V_star = V
-        assert np.allclose(U @ V.T % 2, 0)
-        assert np.allclose(U @ W.T % 2, np.eye(d))
-        assert np.allclose(V_star @ V.T % 2, np.eye(m - d))
+        # assert np.allclose(U @ V.T % 2, 0)
+        # assert np.allclose(U @ W.T % 2, np.eye(d))
+        # assert np.allclose(V_star @ V.T % 2, np.eye(m - d))
         PPS[b] = (U, V, W, V_star @ (I - W.T @ U) % 2)
     # Compute projection indices and aggregation indices
     hz, hs, ht = [1 << np.arange(k)[::-1] for k in [m, d, m - d]]
@@ -98,11 +98,11 @@ def projection_index(m, d, filter_func=lambda B: True):
         proj_idx_B = (evalu_index ^ coset_index) @ hz
         # s = U z,  t = V^* (I - W^T U) z
         s_idx_B, t_idx_B = Z @ U.T % 2 @ hs, Z @ Y.T % 2 @ ht
-        if (proj_idx_B[0] == np.arange(1 << (m - d))).all():
-            print(U)
-            print(proj_idx_B)
-        assert np.allclose(np.bitwise_xor.reduce(proj_idx_B, axis=0), 0)
-        assert all(proj_idx_B[s, t] == v for v, s, t in zip(range(1 << m), s_idx_B, t_idx_B))
+        # if (proj_idx_B[0] == np.arange(1 << (m - d))).all():
+        #     print(U)
+        #     print(proj_idx_B)
+        # assert d == 1 or np.allclose(np.bitwise_xor.reduce(proj_idx_B, axis=0), 0)
+        # assert all(proj_idx_B[s, t] == v for v, s, t in zip(range(1 << m), s_idx_B, t_idx_B))
         proj_idx[b], B_idx[b] = proj_idx_B, np.full(1 << m, b)
         s_idx[b], t_idx[b] = s_idx_B, t_idx_B
     return [np.array(arr) for arr in [proj_idx, B_idx, s_idx, t_idx]]
@@ -144,9 +144,9 @@ def puncturing_index(m, d, filter_func=lambda B: True):
         mask[U.argmax(axis=1)] = True
         P, Q = U[:, ~mask], np.vstack([I[mask], I[~mask]])
         V, W, V_star = (P.T @ Q[:d] + Q[d:]) % 2, Q[:d], Q[d:]
-        assert np.allclose(U @ V.T % 2, 0)
-        assert np.allclose(U @ W.T % 2, np.eye(d))
-        assert np.allclose(V_star @ V.T % 2, np.eye(m - d))
+        # assert np.allclose(U @ V.T % 2, 0)
+        # assert np.allclose(U @ W.T % 2, np.eye(d))
+        # assert np.allclose(V_star @ V.T % 2, np.eye(m - d))
         PPS[b] = (U, V, W, V_star @ (I - W.T @ U) % 2)
     # Compute projection indices and aggregation indices
     hz, hs, ht = [1 << np.arange(k)[::-1] for k in [m, d, m - d]]
@@ -159,13 +159,13 @@ def puncturing_index(m, d, filter_func=lambda B: True):
         evalu_index = (S @ W % 2)[:, None, :]
         coset_index = (T @ V % 2)[None, ...]
         punc_idx_B = (evalu_index ^ coset_index) @ hz
-        if (punc_idx_B[0] == np.arange(1 << (m - d))).all():
-            print(U)
-            print(punc_idx_B)
+        # if (punc_idx_B[0] == np.arange(1 << (m - d))).all():
+        #     print(U)
+        #     print(punc_idx_B)
         # s = U z,  t = V^* (I - W^T U) z
         s_idx_B, t_idx_B = Z @ U.T % 2 @ hs, Z @ Y.T % 2 @ ht
-        assert np.allclose(np.bitwise_xor.reduce(punc_idx_B, axis=0), 0)
-        assert all(punc_idx_B[s, t] == v for v, s, t in zip(range(1 << m), s_idx_B, t_idx_B))
+        # assert d == 1 or np.allclose(np.bitwise_xor.reduce(punc_idx_B, axis=0), 0)
+        # assert all(punc_idx_B[s, t] == v for v, s, t in zip(range(1 << m), s_idx_B, t_idx_B))
         punc_idx[b], B_idx[b] = punc_idx_B, np.full(1 << m, b)
         s_idx[b], t_idx[b] = s_idx_B, t_idx_B
     return [np.array(arr) for arr in [punc_idx, B_idx, s_idx, t_idx]]
