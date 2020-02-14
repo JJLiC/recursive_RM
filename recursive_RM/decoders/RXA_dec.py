@@ -4,10 +4,12 @@ from recursive_RM.common.fwht import fwht, fwht_Z2
 from recursive_RM.common.indexing import puncturing_index
 
 
-def ext_Hamming_decode_soft(L):
+def ext_Hamming_decode_soft(L, llr_clip=30):
     ''' soft bit-MAP decoder for RM(m - 2, m) on the last axis
     Arguments:
         L -- input LLR
+    Keyword Arguments:
+        llr_clip -- LLR clipping value {default: 30}
     Returns:
         L_out -- output LLR
     '''
@@ -24,7 +26,7 @@ def ext_Hamming_decode_soft(L):
     tau = np.log(np.maximum(abs(rho), eps))
     s, delta = fwht(tau), fwht_Z2(beta0, beta1)
     t = (s[..., [0]] + np.concatenate([s, -s], axis=-1)) / 2
-    t = np.clip(t, -30, 30)
+    t = np.clip(t, -llr_clip, llr_clip)
     h = (-1) ** delta * np.exp(t)
     r, q = fwht(h[..., :n] - h[..., n:]), h.sum(axis=-1, keepdims=True)
     w0, w1 = (q - r) / 2, (q + r) / 2
@@ -34,17 +36,19 @@ def ext_Hamming_decode_soft(L):
     return L_out
 
 
-def RXA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, root=True):
+def RXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, root=True):
     ''' Recursive Puncture-Aggregation BP algorithm
     Arguments:
         llr -- input LLR
         r -- degree of Reed-Muller code
         m -- number of variables of Reed-Muller code
     Keyword Arguments:
-        weight -- scale factor for BP messages (default: number of subspace)
+        weight -- dict in form of [(r, m): scale]
+                  scale factor for BP messages (default: {})
         damp -- damping coefficient (default: 1)
         t_max -- maximum iteration number (default: 15)
         theta -- relative threshold for stopping criterion (default: 0.01)
+        llr_clip -- LLR clipping value {default: 30}
         root -- if this is the root function call (default: True)
     Returns:
         x_hat -- if root, return decoded codeword, else return LLR
@@ -53,7 +57,7 @@ def RXA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, root=True):
         # Avoid zeros in subcode LLR
         llr = np.maximum(abs(llr), 1e-4) * np.sign(llr)
         # Decode base extended Hamming subcode
-        llr_hat = ext_Hamming_decode_soft(llr)
+        llr_hat = ext_Hamming_decode_soft(llr, llr_clip)
     else:
         # Compute index and message shapes
         punc_idx, *aggr_idx = puncturing_index(m, 1)
@@ -65,7 +69,7 @@ def RXA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, root=True):
         # Reshape input LLR to fit high-dimensional array
         llr = llr[..., None, :]
         # Set weight in aggregation step
-        weight = weight or 1 / n_B
+        scale = weight.get((r, m), 1 / n_B)
 
         # Initialize BP message and result of previous iteration
         fwd_msg = np.zeros(fwd_msg_shape)
@@ -78,35 +82,36 @@ def RXA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, root=True):
 
         for t in range(t_max):
             # Avoid zeros in subcode LLR
-            fwd_msg = np.maximum(abs(fwd_msg), 1e-4) * np.sign(fwd_msg)
+            subcode_llr = fwd_msg = np.maximum(abs(fwd_msg), 1e-4) * np.sign(fwd_msg)
 
             # Puncture and decode subcodes
-            subcode_llr_hat = RXA(fwd_msg, r, m - 1, weight, damp, t_max, theta, root=False)
+            subcode_llr_hat = RXA(fwd_msg, r, m - 1, weight, damp, t_max, theta, llr_clip, root=False)
+            # subcode_llr_hat = subcode_llr_hat - subcode_llr
             # Apply damping if coefficient is not 1
             if damp != 1:
                 subcode_llr_hat *= damp
                 subcode_llr_hat += (1 - damp) * subcode_llr_hat_old
             # Clip value for numerical stability
-            subcode_llr_hat = np.clip(subcode_llr_hat, -30, 30)
+            subcode_llr_hat = np.clip(subcode_llr_hat, -llr_clip, llr_clip)
             subcode_llr_hat_old = subcode_llr_hat
             # Assign subcode LLR to backward messages
             bkd_msg = subcode_llr_hat[aggr_idx]
 
             # Aggregation and apply BP
             aggr_sum = bkd_msg.sum(axis=-2, keepdims=True)
-            aggr_msg = llr + weight * (aggr_sum - bkd_msg)
+            aggr_msg = llr + scale * (aggr_sum - bkd_msg)
             # Apply damping if coefficient is not 1
             if damp != 1:
                 aggr_msg *= damp
                 aggr_msg += (1 - damp) * aggr_msg_old
             # Clip value for numerical stability
-            aggr_msg = np.clip(aggr_msg, -30, 30)
+            aggr_msg = np.clip(aggr_msg, -llr_clip, llr_clip)
             aggr_msg_old = aggr_msg
             # Assign backward messages to subcode LLR
             fwd_msg[aggr_idx] = aggr_msg
 
             # Marginalization and stopping criterion
-            llr_hat = weight * aggr_sum
+            llr_hat = scale * aggr_sum
             x_hat = llr_hat < 0
             if (x_hat == x_hat_old).all() and norm(llr_hat - llr_hat_old) < theta * norm(llr_hat):
                 break
@@ -115,17 +120,19 @@ def RXA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, root=True):
     return x_hat.squeeze().astype(int) if root else llr_hat.squeeze()
 
 
-def CXA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01):
+def CXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30):
     ''' Collapsed Recursive Puncture-Aggregation BP algorithm
     Arguments:
         llr -- input LLR
         r -- degree of Reed-Muller code
         m -- number of variables of Reed-Muller code
     Keyword Arguments:
-        weight -- scale factor for BP messages (default: number of subspace)
+        weight -- dict in form of [(r, m): scale]
+                  scale factor for BP messages (default: {})
         damp -- damping coefficient (default: 1)
         t_max -- maximum iteration number (default: 15)
         theta -- relative threshold for stopping criterion (default: 0.01)
+        llr_clip -- LLR clipping value {default: 30}
     Returns:
         x_hat -- decoded codeword
     '''
@@ -137,7 +144,7 @@ def CXA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01):
     bkd_msg_shape = (n_B, 1 << m)
 
     # Set weight in aggregation step
-    weight = weight or 1 / n_B
+    scale = weight.get((r, m), 1 / n_B)
 
     # Initialize BP message and result of previous iteration
     fwd_msg = np.zeros(fwd_msg_shape)
@@ -150,35 +157,36 @@ def CXA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01):
 
     for t in range(t_max):
         # Avoid zeros in subcode LLR
-        fwd_msg = np.maximum(abs(fwd_msg), 1e-4) * np.sign(fwd_msg)
+        subcode_llr = fwd_msg = np.maximum(abs(fwd_msg), 1e-4) * np.sign(fwd_msg)
 
         # Puncture to sub-code and decode extended Hamming
-        subcode_llr_hat = ext_Hamming_decode_soft(fwd_msg)
+        subcode_llr_hat = ext_Hamming_decode_soft(fwd_msg, llr_clip)
+        # subcode_llr_hat = subcode_llr_hat - subcode_llr
         # Apply damping if coefficient is not 1
         if damp != 1:
             subcode_llr_hat *= damp
             subcode_llr_hat += (1 - damp) * subcode_llr_hat_old
         # Clip value for numerical stability
-        subcode_llr_hat = np.clip(subcode_llr_hat, -30, 30)
+        subcode_llr_hat = np.clip(subcode_llr_hat, -llr_clip, llr_clip)
         subcode_llr_hat_old = subcode_llr_hat
         # Assign subcode LLR to backward messages
         bkd_msg = subcode_llr_hat[aggr_idx]
 
         # Aggregation and apply BP
         aggr_sum = bkd_msg.sum(axis=-2)
-        aggr_msg = llr + weight * (aggr_sum - bkd_msg)
+        aggr_msg = llr + scale * (aggr_sum - bkd_msg)
         # Apply damping if coefficient is not 1
         if damp != 1:
             aggr_msg *= damp
             aggr_msg += (1 - damp) * aggr_msg_old
         # Clip value for numerical stability
-        aggr_msg = np.clip(aggr_msg, -30, 30)
+        aggr_msg = np.clip(aggr_msg, -llr_clip, llr_clip)
         aggr_msg_old = aggr_msg
         # Assign backward messages to subcode LLR
         fwd_msg[aggr_idx] = aggr_msg
 
         # Marginalization and stopping criterion
-        llr_hat = weight * aggr_sum
+        llr_hat = scale * aggr_sum
         x_hat = llr_hat < 0
         if (x_hat == x_hat_old).all() and norm(llr_hat - llr_hat_old) < theta * norm(llr_hat):
             break

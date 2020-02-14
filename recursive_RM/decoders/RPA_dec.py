@@ -21,31 +21,35 @@ def fht_RM1_decode(L, m):
     return c_hat
 
 
-def fht_RM1_decode_soft(L):
+def fht_RM1_decode_soft(L, llr_clip=30):
     ''' soft bit-MAP decoder for RM(1, m)
     Arguments:
         L -- input LLR
+    Keyword Arguments:
+        llr_clip -- LLR clipping value {default: 30}
     Returns:
         L_out -- output LLR
     '''
-    L_hat = np.clip(fwht(L) / 2, -30, 30)
+    L_hat = np.clip(fwht(L) / 2, -llr_clip, llr_clip)
     L_temp = fwht(np.sinh(L_hat)) / np.cosh(L_hat).sum(axis=-1, keepdims=True)
     L_temp = np.clip(L_temp, -1 + 1e-15, 1 - 1e-15)
     L_out = 2 * np.arctanh(L_temp)
     return L_out
 
 
-def RPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard', root=True):
+def RPA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, base_dec='hard', root=True):
     ''' Recursive Puncture-Aggregation BP algorithm
     Arguments:
         llr -- input LLR
         r -- degree of Reed-Muller code
         m -- number of variables of Reed-Muller code
     Keyword Arguments:
-        weight -- scale factor for BP messages (default: number of subspace)
+        weight -- dict in form of [(r, m): scale]
+                  scale factor for BP messages (default: {})
         damp -- damping coefficient (default: 1)
         t_max -- maximum iteration number (default: 15)
         theta -- relative threshold for stopping criterion (default: 0.01)
+        llr_clip -- LLR clipping value {default: 30}
         base_dec -- base case decoding algorithm (default: 'hard')
         root -- if this is the root function call (default: True)
     Returns:
@@ -53,9 +57,9 @@ def RPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard', r
     '''
     if r == 1:
         if base_dec == 'hard':
-            llr_hat = 30 * (-1) ** fht_RM1_decode(llr, m)
+            llr_hat = llr_clip * (-1) ** fht_RM1_decode(llr, m)
         else:
-            llr_hat = fht_RM1_decode_soft(llr)
+            llr_hat = fht_RM1_decode_soft(llr, llr_clip)
     else:
         # Compute index and message shapes
         proj_idx, *aggr_idx = projection_index(m, 1)
@@ -65,11 +69,9 @@ def RPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard', r
         bkd_msg_shape = llr.shape[:-1] + (n_B, 1 << m)
 
         # Reshape input LLR to fit high-dimensional array
-        # new_shape = llr.shape[:-1] + (1,) * (len(fwd_msg_shape) - len(llr.shape[:-1]) - 1) + (llr.shape[-1],)
-        # llr = llr.reshape(new_shape)
         llr = llr[..., None, :]
-        # Set weight in aggregation step
-        weight = weight or 1 / n_B
+        # Set scale in aggregation step
+        scale = weight.get((r, m), 1 / n_B)
 
         # Initialize BP message and result of previous iteration
         fwd_msg = np.zeros(fwd_msg_shape)
@@ -89,13 +91,14 @@ def RPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard', r
             # Clip value to avoid numerical issue of arctanh
             temp = np.clip(temp, -1 + 1e-15, 1 - 1e-15)
             subcode_llr = 2 * np.arctanh(temp)
-            subcode_llr_hat = RPA(subcode_llr, r - 1, m - 1, weight, damp, t_max, theta, base_dec, root=False)
+            subcode_llr_hat = RPA(subcode_llr, r - 1, m - 1, weight, damp, t_max, theta, llr_clip, base_dec, root=False)
+            # subcode_llr_hat = subcode_llr_hat - subcode_llr
             # Apply damping if coefficient is not 1
             if damp != 1:
                 subcode_llr_hat *= damp
                 subcode_llr_hat += (1 - damp) * subcode_llr_hat_old
             # Clip value for numerical stability
-            subcode_llr_hat = np.clip(subcode_llr_hat, -30, 30)
+            subcode_llr_hat = np.clip(subcode_llr_hat, -llr_clip, llr_clip)
             subcode_llr_hat_old = subcode_llr_hat
 
             # Apply backward BP
@@ -109,39 +112,45 @@ def RPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard', r
 
             # Aggregation and apply forward BP
             aggr_sum = bkd_msg.sum(axis=-2, keepdims=True)
-            aggr_msg = llr + weight * (aggr_sum - bkd_msg)
+            if base_dec == 'hard':
+                aggr_msg = scale * (aggr_sum - bkd_msg)
+            else:
+                aggr_msg = llr + scale * (aggr_sum - bkd_msg)
             # Apply damping if coefficient is not 1
             if damp != 1:
                 aggr_msg *= damp
                 aggr_msg += (1 - damp) * aggr_msg_old
             # Clip value for numerical stability
-            aggr_msg = np.clip(aggr_msg, -30, 30)
+            aggr_msg = np.clip(aggr_msg, -llr_clip, llr_clip)
             aggr_msg_old = aggr_msg
             # Assign backward messages to subcode LLR
             fwd_msg[aggr_idx] = aggr_msg
 
             # Marginalization and stopping criterion
-            llr_hat = weight * aggr_sum
+            llr_hat = scale * aggr_sum
             x_hat = llr_hat < 0
             if (x_hat == x_hat_old).all() and norm(llr_hat - llr_hat_old) < theta * norm(llr_hat):
                 break
             # Update result of last iteration
             llr_hat_old, x_hat_old = llr_hat, x_hat
-    return x_hat.squeeze().astype(int) if root else llr_hat.squeeze()
+    return x_hat.squeeze().astype(int) if root else llr_clip * (-1) ** (llr_hat < 0).squeeze()
 
 
-def CPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard'):
+def CPA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, base_dec='hard'):
     ''' Collapsed Recursive Projection-Aggregation BP algorithm
     Arguments:
         llr -- input LLR
         r -- degree of Reed-Muller code
         m -- number of variables of Reed-Muller code
     Keyword Arguments:
-        weight -- scale factor for BP messages (default: number of subspace)
+        weight -- dict in form of [(r, m): scale]
+                  scale factor for BP messages (default: {})
         damp -- damping coefficient (default: 1)
         t_max -- maximum iteration number (default: 15)
         theta -- relative threshold for stopping criterion (default: 0.01)
+        llr_clip -- LLR clipping value {default: 30}
         base_dec -- base case decoding algorithm (default: 'hard')
+                    if hard, use intrinsic, otherwise use extrinsic
     Returns:
         x_hat -- decoded codeword
     '''
@@ -153,7 +162,7 @@ def CPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard'):
     bkd_msg_shape = (n_B, 1 << m)
 
     # Set weight in aggregation step
-    weight = weight or 1 / n_B
+    scale = weight.get((r, m), 1 / n_B)
 
     # Initialize BP message and result of previous iteration
     fwd_msg = np.zeros(fwd_msg_shape)
@@ -174,15 +183,16 @@ def CPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard'):
         temp = np.clip(temp, -1 + 1e-15, 1 - 1e-15)
         subcode_llr = 2 * np.arctanh(temp)
         if base_dec == 'hard':
-            subcode_llr_hat = 30 * (-1) ** fht_RM1_decode(subcode_llr, m - d)
+            subcode_llr_hat = llr_clip * (-1) ** fht_RM1_decode(subcode_llr, m - d)
         else:
-            subcode_llr_hat = fht_RM1_decode_soft(subcode_llr)
+            subcode_llr_hat = fht_RM1_decode_soft(subcode_llr, llr_clip)
+        # subcode_llr_hat = subcode_llr_hat - subcode_llr
         # Apply damping if coefficient is not 1
         if damp != 1:
             subcode_llr_hat *= damp
             subcode_llr_hat += (1 - damp) * subcode_llr_hat_old
         # Clip value for numerical stability
-        subcode_llr_hat = np.clip(subcode_llr_hat, -30, 30)
+        subcode_llr_hat = np.clip(subcode_llr_hat, -llr_clip, llr_clip)
         subcode_llr_hat_old = subcode_llr_hat
 
         # Apply backward BP
@@ -196,19 +206,22 @@ def CPA(llr, r, m, weight=None, damp=1, t_max=15, theta=0.01, base_dec='hard'):
 
         # Aggregation and apply forward BP
         aggr_sum = bkd_msg.sum(axis=-2)
-        aggr_msg = llr + weight * (aggr_sum - bkd_msg)
+        if base_dec == 'hard':
+            aggr_msg = scale * (aggr_sum - bkd_msg)
+        else:
+            aggr_msg = llr + scale * (aggr_sum - bkd_msg)
         # Apply damping if coefficient is not 1
         if damp != 1:
             aggr_msg *= damp
             aggr_msg += (1 - damp) * aggr_msg_old
         # Clip value for numerical stability
-        aggr_msg = np.clip(aggr_msg, -30, 30)
+        aggr_msg = np.clip(aggr_msg, -llr_clip, llr_clip)
         aggr_msg_old = aggr_msg
         # Assign backward messages to subcode LLR
         fwd_msg[aggr_idx] = aggr_msg
 
         # Marginalization and stopping criterion
-        llr_hat = weight * aggr_sum
+        llr_hat = scale * aggr_sum
         x_hat = llr_hat < 0
         if (x_hat == x_hat_old).all() and norm(llr_hat - llr_hat_old) < theta * norm(llr_hat):
             break
