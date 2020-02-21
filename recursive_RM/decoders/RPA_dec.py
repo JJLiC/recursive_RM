@@ -92,7 +92,8 @@ def RPA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, base_de
             temp = np.clip(temp, -1 + 1e-15, 1 - 1e-15)
             subcode_llr = 2 * np.arctanh(temp)
             subcode_llr_hat = RPA(subcode_llr, r - 1, m - 1, weight, damp, t_max, theta, llr_clip, base_dec, root=False)
-            # subcode_llr_hat = subcode_llr_hat - subcode_llr
+            if base_dec != 'hard':
+                subcode_llr_hat = subcode_llr_hat - subcode_llr
             # Apply damping if coefficient is not 1
             if damp != 1:
                 subcode_llr_hat *= damp
@@ -163,6 +164,7 @@ def CPA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, base_de
 
     # Set weight in aggregation step
     scale = weight.get((r, m), 1 / n_B)
+    # print(scale, 1 / scale, n_B)
 
     # Initialize BP message and result of previous iteration
     fwd_msg = np.zeros(fwd_msg_shape)
@@ -186,7 +188,7 @@ def CPA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, base_de
             subcode_llr_hat = llr_clip * (-1) ** fht_RM1_decode(subcode_llr, m - d)
         else:
             subcode_llr_hat = fht_RM1_decode_soft(subcode_llr, llr_clip)
-        # subcode_llr_hat = subcode_llr_hat - subcode_llr
+            subcode_llr_hat = subcode_llr_hat - subcode_llr
         # Apply damping if coefficient is not 1
         if damp != 1:
             subcode_llr_hat *= damp
