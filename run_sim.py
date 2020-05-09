@@ -122,7 +122,7 @@ for i, EbNo_dB in enumerate(dB_range):
     results.append({x: [] for x in metrics})
 
     while (len(results[i]["word_error_list"]) < maxCw[i] and np.sum(results[i]["word_error_list"]) < minCwErr[i]):
-        # print
+        # print if verbose
         if (verbose and len(results[i]["word_error_list"])%10 == 0):
             print("n="+str(len(results[i]["word_error_list"]))+" blkerr="+str(np.sum(results[i]["word_error_list"])))
         # generate the LLR sequence
@@ -139,7 +139,8 @@ for i, EbNo_dB in enumerate(dB_range):
         results[i]["bit_error_list"].append( diff_list.sum() )
         results[i]["word_error_list"].append( diff_list.any() )
         results[i]["ML_lower_bound_list"].append( np.dot((-1) ** c, llr) < np.dot((-1) ** c_hat_list, llr) )
-        
+
+    # Summarize if verbose
     if (verbose):
         print({k:np.sum(v) for (k,v) in results[i].items()})
         
