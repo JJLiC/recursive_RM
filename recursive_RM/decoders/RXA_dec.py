@@ -74,9 +74,9 @@ def RXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, root=Tr
         # Initialize BP message and result of previous iteration
         fwd_msg = np.zeros(fwd_msg_shape)
         fwd_msg[aggr_idx] = llr
-        subcode_llr_hat_old = fwd_msg.copy()
+        subcode_llr_hat_old = None
         bkd_msg = np.zeros(bkd_msg_shape)
-        aggr_msg_old = np.tile(llr, (n_B, 1))
+        aggr_msg_old = None
         llr_hat_old = np.zeros_like(llr)
         x_hat_old = np.zeros_like(llr, dtype=int)
 
@@ -88,12 +88,12 @@ def RXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, root=Tr
             subcode_llr_hat = RXA(fwd_msg, r, m - 1, weight, damp, t_max, theta, llr_clip, root=False)
             # subcode_llr_hat = subcode_llr_hat - subcode_llr
             # Apply damping if coefficient is not 1
-            if damp != 1:
+            if subcode_llr_hat_old is not None and damp != 1:
                 subcode_llr_hat *= damp
                 subcode_llr_hat += (1 - damp) * subcode_llr_hat_old
             # Clip value for numerical stability
             subcode_llr_hat = np.clip(subcode_llr_hat, -llr_clip, llr_clip)
-            subcode_llr_hat_old = subcode_llr_hat
+            subcode_llr_hat_old = subcode_llr_hat.copy()
             # Assign subcode LLR to backward messages
             bkd_msg = subcode_llr_hat[aggr_idx]
 
@@ -101,12 +101,12 @@ def RXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, root=Tr
             aggr_sum = bkd_msg.sum(axis=-2, keepdims=True)
             aggr_msg = llr + scale * (aggr_sum - bkd_msg)
             # Apply damping if coefficient is not 1
-            if damp != 1:
+            if aggr_msg_old is not None and damp != 1:
                 aggr_msg *= damp
                 aggr_msg += (1 - damp) * aggr_msg_old
             # Clip value for numerical stability
             aggr_msg = np.clip(aggr_msg, -llr_clip, llr_clip)
-            aggr_msg_old = aggr_msg
+            aggr_msg_old = aggr_msg.copy()
             # Assign backward messages to subcode LLR
             fwd_msg[aggr_idx] = aggr_msg
 
@@ -116,7 +116,7 @@ def RXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30, root=Tr
             if (x_hat == x_hat_old).all() and norm(llr_hat - llr_hat_old) < theta * norm(llr_hat):
                 break
             # Update result of last iteration
-            llr_hat_old, x_hat_old = llr_hat, x_hat
+            llr_hat_old, x_hat_old = llr_hat.copy(), x_hat.copy()
     return x_hat.squeeze().astype(int) if root else llr_hat.squeeze()
 
 
@@ -149,9 +149,9 @@ def CXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30):
     # Initialize BP message and result of previous iteration
     fwd_msg = np.zeros(fwd_msg_shape)
     fwd_msg[aggr_idx] = llr
-    subcode_llr_hat_old = fwd_msg.copy()
+    subcode_llr_hat_old = None
     bkd_msg = np.zeros(bkd_msg_shape)
-    aggr_msg_old = np.tile(llr, (n_B, 1))
+    aggr_msg_old = None
     llr_hat_old = np.zeros_like(llr)
     x_hat_old = np.zeros_like(llr, dtype=int)
 
@@ -163,12 +163,12 @@ def CXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30):
         subcode_llr_hat = ext_Hamming_decode_soft(fwd_msg, llr_clip)
         # subcode_llr_hat = subcode_llr_hat - subcode_llr
         # Apply damping if coefficient is not 1
-        if damp != 1:
+        if subcode_llr_hat_old is not None and damp != 1:
             subcode_llr_hat *= damp
             subcode_llr_hat += (1 - damp) * subcode_llr_hat_old
         # Clip value for numerical stability
         subcode_llr_hat = np.clip(subcode_llr_hat, -llr_clip, llr_clip)
-        subcode_llr_hat_old = subcode_llr_hat
+        subcode_llr_hat_old = subcode_llr_hat.copy()
         # Assign subcode LLR to backward messages
         bkd_msg = subcode_llr_hat[aggr_idx]
 
@@ -176,12 +176,12 @@ def CXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30):
         aggr_sum = bkd_msg.sum(axis=-2)
         aggr_msg = llr + scale * (aggr_sum - bkd_msg)
         # Apply damping if coefficient is not 1
-        if damp != 1:
+        if aggr_msg_old is not None and damp != 1:
             aggr_msg *= damp
             aggr_msg += (1 - damp) * aggr_msg_old
         # Clip value for numerical stability
         aggr_msg = np.clip(aggr_msg, -llr_clip, llr_clip)
-        aggr_msg_old = aggr_msg
+        aggr_msg_old = aggr_msg.copy()
         # Assign backward messages to subcode LLR
         fwd_msg[aggr_idx] = aggr_msg
 
@@ -191,5 +191,5 @@ def CXA(llr, r, m, weight={}, damp=1, t_max=15, theta=0.01, llr_clip=30):
         if (x_hat == x_hat_old).all() and norm(llr_hat - llr_hat_old) < theta * norm(llr_hat):
             break
         # Update result of last iteration
-        llr_hat_old, x_hat_old = llr_hat, x_hat
+        llr_hat_old, x_hat_old = llr_hat.copy(), x_hat.copy()
     return x_hat.astype(int)

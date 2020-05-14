@@ -7,14 +7,16 @@ from itertools import product, combinations
 
 # Setup parser
 parser = ap.ArgumentParser('Simulate RPA/CPA/RXA/CXA Decoders for Reed-Muller Codes')
-#parser.add_argument('worker_id', default=None, help='Integer id identifying the run')
 parser.add_argument('--verbose', '-v', help='Display text output', action="store_true")
 parser.add_argument('-r', type=int, default=2, help='Order of RM code')
 parser.add_argument('-m', type=int, default=5, help='Size of RM code')
 parser.add_argument('-l', '--list',  type=int,  dest='list_size_log2', default=0, help='Log2 of list size')
 parser.add_argument('-d','--dec', dest='name', default='CPA', help='Name of decoding algorithm')
-#parser.add_argument('-w','--weight', dest='weight', type=float, default=1.0, help='Relative scale factor for variable node update')
+parser.add_argument('-w','--weight', nargs='+', dest='weight', type=float, default=None, help='Scale factor for variable node update')
+parser.add_argument('--hard', help='Use hard-decision component decoding', action="store_true")
+parser.add_argument('-c','--clip', dest='clip', type=float, default=30.0, help='LLR clipping value')
 parser.add_argument('-n','--nblock', nargs='+', type=int, dest='maxCw', default=[100], help='Maximum number of codewords to simulate')
+parser.add_argument('-t','--iter', type=int, dest='tmax', default=15, help='Maximum number of iterations')
 parser.add_argument('--maxerr', nargs='+', type=int, dest='minCwErr', default=[10], help='Maximum number of errors to simulate')
 parser.add_argument('-e','--ebno', nargs='+', dest='dB_range', type=float, default=[2.0], help='List of EbN0s to simulate')
 parser.add_argument('-o','--out', dest='save_filename', default=None, help='Filename for JSON results')
@@ -35,10 +37,10 @@ if (len(args.minCwErr) != len(args.dB_range)):
     minCwErr = [args.minCwErr[0], ]*len(args.dB_range)
     vars(args).update({"minCwErr":minCwErr})
 
-# save file name
-if (args.save_filename is None):
-    timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
-    vars(args).update({"save_filename":'R{}M{}L{}_{}_{}.json'.format(args.r, args.m, args.list_size_log2, args.name, timestamp)})
+# # save file name
+# if (args.save_filename is None):
+#     timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
+#     vars(args).update({"save_filename":'R{}M{}L{}_{}_{}.json'.format(args.r, args.m, args.list_size_log2, args.name, timestamp)})
 
 # Instantiate arguments as local variables for simplicity
 locals().update(vars(args))
@@ -47,11 +49,27 @@ locals().update(vars(args))
 Gsys, perm, inv_perm = systemize(RM(r, m))
 H = RM(m - r - 1, m)
 
+# Handle weight
+wdict = {}
+if (name[0]=="C"):
+    if (weight is not None):
+        wdict = {(r,m): weight[0]}
+if (name[0]=="R"):
+    if (weight is not None):
+        if (len(weight) == r-1):
+            for i in range(r-1):
+                wdict = {(r-i,m-i): weight[i]}
+        else:
+            print("Weight vector incorrect length")
+
 # Setup decoder keyword arguments
-default_kwargs = {'weight': {}, 'damp': 1, 'llr_clip': 30}
+style = 'soft'
+if (hard):
+    style = 'hard'
+default_kwargs = {'weight': wdict, 'damp': 1, 'llr_clip': clip, 't_max': tmax}
 algor_details = {
-    'RPA': ({**default_kwargs, 'base_dec': 'soft'}, RPA),
-    'CPA': ({**default_kwargs, 'base_dec': 'soft'}, CPA),
+    'RPA': ({**default_kwargs, 'base_dec': style}, RPA),
+    'CPA': ({**default_kwargs, 'base_dec': style}, CPA),
     'RXA': (default_kwargs, RXA),
     'CXA': (default_kwargs, CXA)
 }
@@ -109,6 +127,12 @@ def list_decoder_factory(decoder, decoder_kwargs, list_size):
         return c_hat, c_hat_reeds, c_hat_list
     return lambda llr: [out[perm] for out in decode_func(llr[inv_perm])]
 
+# Setup metrics
+metrics = ["info_bit_error","bit_error","word_error","bit_error_reeds",
+           "word_error_reeds","ML_lower_bound","info_bit_error_list",
+           "bit_error_list","word_error_list","ML_lower_bound_list"]
+
+# Outer simulation loop
 rng = np.random.RandomState(seed)
 results = []
 for i, EbNo_dB in enumerate(dB_range):
@@ -116,9 +140,6 @@ for i, EbNo_dB in enumerate(dB_range):
     list_decoder = list_decoder_factory(decoder, kwargs, list_size_log2)
 
     # setup results
-    metrics = ["info_bit_error","bit_error","word_error","ML_lower_bound",
-               "info_bit_error_list","bit_error_list","word_error_list",
-               "ML_lower_bound_list"]
     results.append({x: [] for x in metrics})
 
     while (len(results[i]["word_error_list"]) < maxCw[i] and np.sum(results[i]["word_error_list"]) < minCwErr[i]):
@@ -130,10 +151,12 @@ for i, EbNo_dB in enumerate(dB_range):
         # decode the LLR sequence
         c_hat, c_hat_reeds, c_hat_list = list_decoder(llr)
         # fill the result array
-        diff, diff_list = abs(c - c_hat), abs(c - c_hat_list)
+        diff, diff_reeds, diff_list = abs(c - c_hat), abs(c - c_hat_reeds), abs(c - c_hat_list)
         results[i]["info_bit_error"].append( diff[:Gsys.shape[0]].sum() )
         results[i]["bit_error"].append( diff.sum() )
         results[i]["word_error"].append( diff.any() )
+        results[i]["bit_error_reeds"].append( diff_reeds.sum() )
+        results[i]["word_error_reeds"].append( diff_reeds.any() )
         results[i]["ML_lower_bound"].append( np.dot((-1) ** c, llr) < np.dot((-1) ** c_hat_reeds, llr) )
         results[i]["info_bit_error_list"].append( diff_list[:Gsys.shape[0]].sum() )
         results[i]["bit_error_list"].append( diff_list.sum() )
@@ -158,6 +181,18 @@ class npEncoder(json.JSONEncoder):
         else:
             return super(npEncoder, self).default(obj)
 
-# Save with append 
-with open(save_filename, 'at') as f:
-    f.write(json.dumps(vars(args),cls=npEncoder)+'\n'+json.dumps(results,cls=npEncoder)+'\n')
+# Save with append or print to stdout
+if (save_filename is not None):
+    with open(save_filename, 'at') as f:
+        f.write(json.dumps(vars(args),cls=npEncoder)+'\n'+json.dumps(results,cls=npEncoder)+'\n')
+else:
+    print("EbN0: "+str(dB_range))
+    nblock = [len(results[i][metrics[1]]) for (i,_) in enumerate(dB_range)]
+    print("nBlock: "+str(nblock))
+    for metric in metrics:
+        temp = []
+        for i, EbNo_dB in enumerate(dB_range):
+            val = np.sum(results[i][metric])
+            count = nblock[i]
+            temp.append(val)
+        print(metric+": "+str(temp))
